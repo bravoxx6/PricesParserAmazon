@@ -6,16 +6,20 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
+import os
+from dotenv import load_dotenv
 
 
-# ---------- DB CONFIG ----------
+load_dotenv()
+
 DB_CONFIG = {
-    "dbname": "amazon_db",
-    "user": "postgres",
-    "password": "12345",
-    "host": "localhost",
-    "port": "5432"
+    "dbname": os.getenv("DB_NAME"),
+    "user": os.getenv("DB_USER"),
+    "password": os.getenv("DB_PASSWORD"),
+    "host": os.getenv("DB_HOST"),
+    "port": os.getenv("DB_PORT")
 }
+
 
 # ---------- INIT DB ----------
 def init_db():

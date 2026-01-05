@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.pdb
+
+# Virtual environment
+venv/
+env/
+
+# Logs
+*.log
+
+# IDE
+.idea/
+.vscode/
+
+# Selenium/Browser
+chromedriver.exe
+*.db
+*.sqlite3
+
+# Secrets
+.env
