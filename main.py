@@ -1,106 +1,158 @@
+import re
 import time
 import psycopg2
+from psycopg2 import sql
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
 
-# --- НАСТРОЙКИ БАЗЫ ДАННЫХ ---
+# ---------- DB CONFIG ----------
 DB_CONFIG = {
     "dbname": "amazon_db",
     "user": "postgres",
-    "password": "12345", 
+    "password": "12345",
     "host": "localhost",
     "port": "5432"
 }
 
-# --- ИНИЦИАЛИЗАЦИЯ БАЗЫ ---
 def init_db():
+    conn = psycopg2.connect(**DB_CONFIG)
+    conn.set_client_encoding('UTF8')
+    cur = conn.cursor()
+
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS laptops (
+            id SERIAL PRIMARY KEY,
+            model TEXT NOT NULL,
+            price TEXT,
+            old_price TEXT DEFAULT '',
+            discount TEXT DEFAULT '',
+            parsed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+    """)
+    conn.commit()
+    cur.close()
+    return conn
+
+
+def parse_price_to_float(price_str):
+    """Извлекает число из строки цены, возвращает float или None"""
+    if not price_str:
+        return None
+    # Удаляем все кроме цифр и точки/запятой
+    cleaned = re.sub(r'[^\d.,]', '', price_str).replace(',', '.')
+    # Возможны вариации вроде "1,299.99" -> оставим только последнюю точку
+    # Простая логика: если несколько точек — оставим последнюю как десятичную
+    parts = cleaned.split('.')
+    if len(parts) > 2:
+        # объединяем все кроме последнего
+        cleaned = ''.join(parts[:-1]) + '.' + parts[-1]
     try:
-        conn = psycopg2.connect(**DB_CONFIG)
-        cursor = conn.cursor()
-        # Создаем таблицу, если её нет
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS laptops (
-                id SERIAL PRIMARY KEY NOT NULL,
-                title TEXT NOT NULL,
-                price VARCHAR(50) NOT NULL,
-                link TEXT,
-                parsed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL
-            );
-        """)
-        conn.commit()
-        return conn
-    except Exception as e:
-        print(f"Ошибка подключения к БД: {e}")
+        return float(cleaned)
+    except:
         return None
 
-# --- ФУНКЦИЯ ПАРСИНГА ---
-def scrape_amazon(search_query, conn):
-    # Настройка браузера
-    options = Options()
-    # options.add_argument("--headless") # Раскомментируйте, чтобы скрыть окно браузера
-    options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36")
-    options.add_argument("--disable-blink-features=AutomationControlled")
+def safe_find_text(element, selectors):
+    """Пытается вернуть текст/атрибут по списку селекторов (css селектор или xpath)"""
+    for sel in selectors:
+        try:
+            if sel.startswith('//') or sel.startswith('.//'):
+                el = element.find_element(By.XPATH, sel)
+            else:
+                el = element.find_element(By.CSS_SELECTOR, sel)
+            # для цен иногда используем get_attribute
+            txt = el.get_attribute("textContent") or el.text
+            if txt:
+                return txt.strip()
+        except:
+            continue
+    return None
 
-    driver = webdriver.Chrome(options=options)
-    
+def parse_amazon_v2():
+    conn = init_db()
     try:
-        url = f"https://www.amazon.com/s?k={search_query}"
-        print(f"Открываю: {url}")
-        driver.get(url)
-        
-        # Ждем прогрузки (лучше использовать WebDriverWait, но для простоты sleep)
-        time.sleep(5) 
-        
-        # Ищем карточки товаров. Селекторы актуальны на 2025, но могут меняться!
-        # Amazon часто использует div с атрибутом data-component-type="s-search-result"
-        items = driver.find_elements(By.CSS_SELECTOR, 'div[data-component-type="s-search-result"]')
-        
-        cursor = conn.cursor()
-        count = 0
-        
-        for item in items:
-            try:
-                # Поиск названия
-                title_elem = item.find_element(By.CSS_SELECTOR, "h2 a span")
-                title = title_elem.text
-                
-                # Поиск ссылки
-                link_elem = item.find_element(By.CSS_SELECTOR, "h2 a")
-                link = link_elem.get_attribute("href")
-                
-                # Поиск цены (она хитро спрятана, берем "offscreen" или видимую часть)
-                # На Amazon цена часто дробится на целую и дробную части
+        with conn:
+            with conn.cursor() as cur:
+                options = Options()
+                # имитация обычного браузера
+                options.add_experimental_option("excludeSwitches", ["enable-automation"])
+                options.add_experimental_option('useAutomationExtension', False)
+                options.add_argument("--disable-blink-features=AutomationControlled")
+                options.add_argument("start-maximized")
+                # поменяйте user-agent при необходимости
+                options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                                     "(KHTML, like Gecko) Chrome/120.0 Safari/537.36")
+                # НЕ включаем headless по умолчанию — он чаще вызывает капчу
+                driver = webdriver.Chrome(options=options)
+
                 try:
-                    price_elem = item.find_element(By.CSS_SELECTOR, ".a-price .a-offscreen")
-                    price = price_elem.get_attribute("textContent")
-                except:
-                    price = "Нет цены"
+                    driver.get("https://www.amazon.com/s?k=laptop")
+                    # выдержка для загрузки и первичный скролл
+                    print("Прокручиваю страницу для загрузки товаров...")
+                    for _ in range(6):
+                        driver.execute_script("window.scrollBy(0, 900);")
+                        time.sleep(1.2)
 
-                # Сохранение в PostgreSQL
-                cursor.execute("""
-                    INSERT INTO laptops (title, price, link)
-                    VALUES (%s, %s, %s)
-                """, (title, price, link))
-                
-                print(f"Найдено: {title[:30]}... | {price}")
-                count += 1
-                
-            except Exception as e:
-                # Иногда попадаются рекламные блоки или пустые места
-                continue
+                    # Ждём карточки
+                    try:
+                        WebDriverWait(driver, 10).until(
+                            EC.presence_of_element_located((By.CSS_SELECTOR, "div[data-component-type='s-search-result']"))
+                        )
+                    except Exception as e:
+                        print("Элементы не появились на странице. Возможно капча или блокировка.")
+                        return
 
-        conn.commit()
-        print(f"\nСохранено {count} товаров в PostgreSQL.")
+                    cards = driver.find_elements(By.CSS_SELECTOR, "div[data-component-type='s-search-result']")
+                    print(f"Найдено карточек: {len(cards)}")
 
-    except Exception as e:
-        print(f"Ошибка парсинга: {e}")
+                    for idx, card in enumerate(cards, start=1):
+                        try:
+                            # Название: пробуем несколько мест
+                            model = None
+                            # В некоторых карточках название в h2 > a > span
+                            model = safe_find_text(card, ["h2 a span", "h2", "img"])
+                            if not model:
+                                # fallback: искать внутри ссылки
+                                try:
+                                    a = card.find_element(By.CSS_SELECTOR, "a.a-link-normal.s-no-outline")
+                                    model = a.get_attribute("title") or a.text
+                                except:
+                                    pass
+                            if isinstance(model, str) and len(model) > 300:
+                                model = model[:300]
+
+                            
+
+                            # Цена: несколько вариантов
+                            price = safe_find_text(card, [".a-price .a-offscreen", ".sg-col-inner .a-price .a-offscreen"])
+                            old_price = safe_find_text(card, [".a-price.a-text-price .a-offscreen", ".a-price-whole + .a-price-fraction"])
+                            discount = safe_find_text(card, [".a-letter-space + .a-size-base", ".s-label-popover-default"])
+
+                            
+
+                            if model and price:
+                                cur.execute("""
+                                    INSERT INTO laptops (model, price, old_price, discount)
+                                    VALUES (%s, %s, %s, %s, %s);
+                                """, (model, price, old_price or '', discount or ''))
+                                print(f"[{idx}] Вставлено/обнаружено: {model[:60]} — {price}")
+                            else:
+                                print(f"[{idx}] Пропущена карточка (не все поля найдены). model={bool(model)}, price={bool(price)}")
+
+                        except Exception as e:
+                            # не останавливаем весь парсинг из-за одной карточки
+                            print("Ошибка при обработке карточки:", e)
+                            continue
+
+                    # коммит делается автоматически в with conn:
+                    print("Парсинг завершён, изменения сохранены.")
+
+                finally:
+                    driver.quit()
     finally:
-        driver.quit()
+        conn.close()
 
-# --- ЗАПУСК ---
 if __name__ == "__main__":
-    db_connection = init_db()
-    if db_connection:
-        scrape_amazon("laptop", db_connection)
-        db_connection.close()
+    parse_amazon_v2()
