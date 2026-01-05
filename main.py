@@ -19,7 +19,7 @@ DB_CONFIG = {
 
 def init_db():
     conn = psycopg2.connect(**DB_CONFIG)
-    conn.set_client_encoding('UTF8')
+    conn.set_client_encoding('UTF8')  # 🔥 КЛЮЧЕВО
     cur = conn.cursor()
 
     cur.execute("""
@@ -29,6 +29,7 @@ def init_db():
             price TEXT,
             old_price TEXT DEFAULT '',
             discount TEXT DEFAULT '',
+            link TEXT UNIQUE,
             parsed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
     """)
@@ -123,23 +124,33 @@ def parse_amazon_v2():
                             if isinstance(model, str) and len(model) > 300:
                                 model = model[:300]
 
-                            
+                            # Ссылка товара
+                            link = None
+                            try:
+                                a_tag = card.find_element(By.CSS_SELECTOR, "a.a-link-normal.s-no-outline")
+                                link = a_tag.get_attribute("href")
+                            except:
+                                try:
+                                    link = card.find_element(By.TAG_NAME, "a").get_attribute("href")
+                                except:
+                                    link = None
 
                             # Цена: несколько вариантов
                             price = safe_find_text(card, [".a-price .a-offscreen", ".sg-col-inner .a-price .a-offscreen"])
                             old_price = safe_find_text(card, [".a-price.a-text-price .a-offscreen", ".a-price-whole + .a-price-fraction"])
                             discount = safe_find_text(card, [".a-letter-space + .a-size-base", ".s-label-popover-default"])
 
-                            
+                            price_value = parse_price_to_float(price)
 
-                            if model and price:
+                            if link and model and price:
                                 cur.execute("""
-                                    INSERT INTO laptops (model, price, old_price, discount)
-                                    VALUES (%s, %s, %s, %s, %s);
-                                """, (model, price, old_price or '', discount or ''))
+                                    INSERT INTO laptops (model, price, old_price, discount, link)
+                                    VALUES (%s, %s, %s, %s, %s)
+                                    ON CONFLICT (link) DO NOTHING;
+                                """, (model, price, old_price or '', discount or '', link))
                                 print(f"[{idx}] Вставлено/обнаружено: {model[:60]} — {price}")
                             else:
-                                print(f"[{idx}] Пропущена карточка (не все поля найдены). model={bool(model)}, price={bool(price)}")
+                                print(f"[{idx}] Пропущена карточка (не все поля найдены). model={bool(model)}, price={bool(price)}, link={bool(link)}")
 
                         except Exception as e:
                             # не останавливаем весь парсинг из-за одной карточки
