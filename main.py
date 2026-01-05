@@ -7,6 +7,7 @@ from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 
+
 # ---------- DB CONFIG ----------
 DB_CONFIG = {
     "dbname": "amazon_db",
@@ -118,45 +119,89 @@ def insert_laptop(cur, data):
     """, (data['model'], data['price'], data['discount'], data['price_str'], data['discount_str']))
 
 # ---------- MAIN PARSING FUNCTION ----------
-def parse_amazon(url="https://www.amazon.com/s?k=laptop", scroll_times=6, scroll_pause=1.2):
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.common.exceptions import NoSuchElementException, TimeoutException
+import time
+
+
+def parse_amazon(url="https://www.amazon.com/s?k=laptop",
+                 scroll_times=3,
+                 scroll_pause=1.2):
+
     conn = init_db()
+    cur = conn.cursor()
+    driver = init_driver(headless=False)
+
     try:
-        with conn:
-            with conn.cursor() as cur:
-                driver = init_driver(headless=False)
+        driver.get(url)
+
+        page_num = 1
+
+        while True:
+            print(f"\n=== Страница {page_num} ===")
+
+            scroll_page(driver, times=scroll_times, pause=scroll_pause)
+
+            try:
+                WebDriverWait(driver, 10).until(
+                    EC.presence_of_element_located(
+                        (By.CSS_SELECTOR, "div[data-component-type='s-search-result']")
+                    )
+                )
+            except TimeoutException:
+                print("Карточки не загрузились (капча или блок).")
+                break
+
+            cards = driver.find_elements(
+                By.CSS_SELECTOR, "div[data-component-type='s-search-result']"
+            )
+            print(f"Найдено карточек: {len(cards)}")
+
+            for idx, card in enumerate(cards, start=1):
                 try:
-                    driver.get(url)
-                    print("Прокручиваю страницу для загрузки товаров...")
-                    scroll_page(driver, times=scroll_times, pause=scroll_pause)
+                    data = parse_card(card)
+                    if data.get('model') and data.get('price'):
+                        insert_laptop(cur, data)
+                        print(f"[{page_num}:{idx}] {data['model'][:60]} — {data['price']}")
+                    else:
+                        print(f"[{page_num}:{idx}] Пропуск (нет данных)")
+                except Exception as e:
+                    print(f"[{page_num}:{idx}] Ошибка карточки:", e)
 
-                    try:
-                        WebDriverWait(driver, 10).until(
-                            EC.presence_of_element_located((By.CSS_SELECTOR, "div[data-component-type='s-search-result']"))
-                        )
-                    except:
-                        print("Элементы не появились на странице. Возможно капча.")
-                        return
+            conn.commit()
 
-                    cards = driver.find_elements(By.CSS_SELECTOR, "div[data-component-type='s-search-result']")
-                    print(f"Найдено карточек: {len(cards)}")
+            # ---------- NEXT PAGE ----------
+            try:
+                next_btn = driver.find_element(By.CSS_SELECTOR, "a.s-pagination-next")
 
-                    for idx, card in enumerate(cards, start=1):
-                        try:
-                            data = parse_card(card)
-                            if data['model'] and data['price']:
-                                insert_laptop(cur, data)
-                                print(f"[{idx}] Вставлено: {data['model'][:60]} — {data['price']}")
-                            else:
-                                print(f"[{idx}] Пропущена карточка (не все поля найдены).")
-                        except Exception as e:
-                            print(f"Ошибка обработки карточки [{idx}]:", e)
-                            continue
-                    print("Парсинг завершён, изменения сохранены.")
-                finally:
-                    driver.quit()
+                if "s-pagination-disabled" in next_btn.get_attribute("class"):
+                    print("Это последняя страница.")
+                    break
+
+                next_btn.click()
+
+                WebDriverWait(driver, 10).until(
+                    EC.staleness_of(cards[0])
+                )
+
+                page_num += 1
+
+            except NoSuchElementException:
+                print("Кнопка Next не найдена.")
+                break
+
     finally:
+        cur.close()
         conn.close()
+        driver.quit()
+        print("\nПарсинг завершён.")
+
 
 # ---------- RUN ----------
 if __name__ == "__main__":
     parse_amazon()
+
+
+# <a href="/s?k=Laptop&amp;i=computers&amp;rh=n%3A565108&amp;page=2&amp;qid=1767631695&amp;xpid=uD2GHbCi8d_P3&amp;ref=sr_pg_1" role="button" tabindex="0" aria-label="Go to next page, page 2" class="s-pagination-item s-pagination-next s-pagination-button s-pagination-button-accessibility s-pagination-separator">Next<svg xmlns="http://www.w3.org/2000/svg" width="8" height="12" viewBox="0 0 8 12" focusable="false" aria-hidden="true"><path d="M2.126.35a1.28 1.28 0 00-1.761 0 1.165 1.165 0 000 1.695L4.478 6 .365 9.955a1.165 1.165 0 000 1.694 1.28 1.28 0 001.76 0L8 6 2.126.35z"></path></svg></a>
