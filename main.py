@@ -30,7 +30,7 @@ def init_db():
             
             discount TEXT,
 
-            parsed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            parsed_at DATE DEFAULT CURRENT_TIMESTAMP
         );
     """)
     conn.commit()
