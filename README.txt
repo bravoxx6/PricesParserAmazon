@@ -28,3 +28,19 @@ This is a Python-based parser for Amazon products and reviews using **Selenium**
 ```bash
 git clone https://github.com/bravoxx6/amazon-parser.git
 cd amazon-parser
+2.
+python -m venv venv
+source venv/bin/activate  # Linux/macOS
+venv\Scripts\activate     # Windows
+3.
+pip install -r requirements.txt
+4.
+DB_NAME=amazon_db
+DB_USER=postgres
+DB_PASSWORD=your_password
+DB_HOST=localhost
+DB_PORT=5432
+
+
+
+
