@@ -27,7 +27,7 @@ def init_db():
             id SERIAL PRIMARY KEY,
             model TEXT NOT NULL,
             price TEXT,
-            old_price TEXT,
+            
             discount TEXT,
 
             parsed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -128,17 +128,17 @@ def parse_amazon_v2():
 
                             # Цена: несколько вариантов
                             price = safe_find_text(card, [".a-price .a-offscreen", ".sg-col-inner .a-price .a-offscreen"])
-                            old_price = safe_find_text(card, [".a-price.a-text-price .a-offscreen", ".a-price-whole + .a-price-fraction"])
+                            
                             discount = safe_find_text(card, [".a-letter-space + .a-size-base", ".s-label-popover-default"])
 
                             
 
                             if model and price:
                                 cur.execute("""
-                                    INSERT INTO laptops (model, price, old_price, discount)
-                                    VALUES (%s, %s, %s, %s);
+                                    INSERT INTO laptops (model, price, discount)
+                                    VALUES (%s, %s, %s);
                                     
-                                """, (model, price, old_price or '', discount or ''))
+                                """, (model, price or '', discount or ''))
                                 print(f"[{idx}] Вставлено/обнаружено: {model[:60]} — {price}")
                             else:
                                 print(f"[{idx}] Пропущена карточка (не все поля найдены). model={bool(model)}, price={bool(price)}")
